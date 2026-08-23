@@ -12,7 +12,7 @@ DuplicateFinder работает только с абстракцией HashComp
 """
 
 from abc import ABC, abstractmethod
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed  # инструменты для работы с пулом потоков
 from pathlib import Path
 from typing import Dict, Iterable, Optional
 
@@ -20,6 +20,9 @@ from .hashing import FileHasher
 
 
 class HashComputationStrategy(ABC):
+    """Интерфейс: "посчитать хеши для списка файлов". Как именно —
+    последовательно или параллельно — решает конкретная реализация."""
+
     @abstractmethod
     def compute_many(
         self,
@@ -51,7 +54,7 @@ class ThreadPoolHashComputation(HashComputationStrategy):
         hasher: FileHasher,
         max_bytes: Optional[int] = None,
     ) -> Dict[Path, str]:
-        paths = list(paths)
+        paths = list(paths)  # на случай, если пришёл "одноразовый" итератор — сохраняем как список
         if not paths:
             return {}
         if self._max_workers == 1:
@@ -62,22 +65,29 @@ class ThreadPoolHashComputation(HashComputationStrategy):
         self, paths, hasher: FileHasher, max_bytes: Optional[int]
     ) -> Dict[Path, str]:
         results: Dict[Path, str] = {}
+        # ThreadPoolExecutor — пул рабочих потоков: задачи распределяются
+        # между несколькими потоками и выполняются одновременно.
         with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
+            # Запускаем хеширование каждого файла как отдельную задачу.
+            # executor.submit() не ждёт результата — сразу возвращает
+            # "будущее" (future), результат появится в нём позже.
             future_to_path = {
                 executor.submit(hasher.compute, path, max_bytes): path for path in paths
             }
+            # as_completed() отдаёт задачи по мере их завершения
+            # (в порядке готовности, а не в порядке запуска).
             for future in as_completed(future_to_path):
                 path = future_to_path[future]
                 try:
-                    results[path] = future.result()
+                    results[path] = future.result()  # результат работы hasher.compute() для этого файла
                 except OSError:
-                    continue
+                    continue  # файл исчез/недоступен — просто пропускаем его
         return results
 
-    @staticmethod
+    @staticmethod  # не использует self — обычная функция, просто "живёт" внутри класса
     def _compute_sequential(paths, hasher: FileHasher, max_bytes: Optional[int]) -> Dict[Path, str]:
         results: Dict[Path, str] = {}
-        for path in paths:
+        for path in paths:  # обычный цикл — один файл за другим, без потоков
             try:
                 results[path] = hasher.compute(path, max_bytes=max_bytes)
             except OSError:

@@ -21,6 +21,9 @@ from .storage import DataFrameResultExporter, ResultPersistence, SqliteResultExp
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
+    """Описывает все аргументы командной строки: как их называть в
+    терминале (--match, --workers, ...), какого они типа и что делают.
+    argparse сам разберёт введённую пользователем строку по этому описанию."""
     parser = argparse.ArgumentParser(
         prog="dup_stat",
         description=(
@@ -120,13 +123,20 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def _build_formatter(fmt: str) -> ReportFormatter:
+    """По названию формата ('text'/'json') выбирает подходящий класс форматтера."""
     return JsonReportFormatter() if fmt == "json" else TextReportFormatter()
 
 
 def main(argv=None) -> int:
-    parser = build_arg_parser()
-    args = parser.parse_args(argv)
+    """Точка входа программы. argv=None означает "взять аргументы из
+    командной строки", но можно передать список строк явно (удобно для тестов).
 
+    Возвращает код завершения: 0 — успех, 1 — ошибка (так принято в CLI-утилитах)."""
+    parser = build_arg_parser()
+    args = parser.parse_args(argv)  # разбираем аргументы командной строки в объект args
+
+    # Проверяем входные данные заранее, чтобы дать понятную ошибку, а не
+    # упасть где-то в середине сканирования с непонятным traceback.
     if not args.directory.exists():
         print(f"Ошибка: директория '{args.directory}' не найдена.", file=sys.stderr)
         return 1
@@ -135,6 +145,9 @@ def main(argv=None) -> int:
         return 1
 
     try:
+        # Здесь создаются конкретные реализации (см. docstring модуля) —
+        # это и есть "точка сборки": единственное место, где всё
+        # соединяется воедино.
         hasher = HashlibFileHasher(algorithm=args.algorithm, chunk_size=args.chunk_size)
         strategy = create_strategy(args.match)
         hash_computation = ThreadPoolHashComputation(max_workers=args.workers)
@@ -152,16 +165,17 @@ def main(argv=None) -> int:
     )
 
     try:
-        scan_result = finder.find_files(args.directory)
+        scan_result = finder.find_files(args.directory)  # запускаем поиск файловых дубликатов
     except (NotADirectoryError, OSError) as exc:
         print(f"Ошибка: {exc}", file=sys.stderr)
         return 1
 
     groups = list(scan_result.groups)
-    if args.find_directories:
+    if args.find_directories:  # включено по умолчанию, выключается флагом --no-dirs
         directory_groups = DirectoryDuplicateFinder().find(
             args.directory, scan_result.sizes, scan_result.hashed_records
         )
+        # Убираем файловые группы, уже "объяснённые" найденной директорией-дубликатом.
         file_groups = filter_subsumed_file_groups(groups, directory_groups)
         groups = sort_groups_by_size_desc(file_groups + directory_groups)
 
@@ -176,10 +190,12 @@ def main(argv=None) -> int:
             print(f"Ошибка: {exc}", file=sys.stderr)
             return 1
         for path in saved_paths:
+            # В stderr, а не в stdout — чтобы не мешать выводу отчёта,
+            # если его перенаправляют в файл (> report.txt).
             print(f"Сохранено: {path}", file=sys.stderr)
 
     return 0
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # True, только если файл запущен напрямую (python cli.py), а не импортирован
     sys.exit(main())

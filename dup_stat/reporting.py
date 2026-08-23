@@ -20,6 +20,7 @@ from typing import List
 from .models import DuplicateGroup, EntryKind
 from .utils import human_readable_size
 
+# Как подписывать тип записи в текстовом отчёте.
 _KIND_LABELS = {
     EntryKind.FILE: "файл",
     EntryKind.DIRECTORY: "директория",
@@ -27,10 +28,15 @@ _KIND_LABELS = {
 
 
 def _kind_label(kind: EntryKind) -> str:
+    """Возвращает подпись для типа записи; .get(..., kind.value) —
+    запасной вариант на случай, если появится новый EntryKind без подписи."""
     return _KIND_LABELS.get(kind, kind.value)
 
 
 class ReportFormatter(ABC):
+    """Интерфейс: "превратить список групп дубликатов в готовую строку
+    для вывода". Конкретный формат (текст, JSON, ...) решает наследник."""
+
     @abstractmethod
     def format(self, groups: List[DuplicateGroup]) -> str:
         raise NotImplementedError
@@ -43,12 +49,13 @@ class TextReportFormatter(ReportFormatter):
         if not groups:
             return "Дубликаты не найдены."
 
-        lines: List[str] = []
-        total_wasted = 0
+        lines: List[str] = []  # собираем текст построчно, в конце склеим через \n
+        total_wasted = 0  # суммарный размер, который можно освободить
 
+        # enumerate(groups, start=1) — даёт и номер (с 1), и саму группу.
         for index, group in enumerate(groups, start=1):
             total_wasted += group.wasted_size
-            sample = group.records[0]
+            sample = group.records[0]  # у всех записей в группе одинаковый размер/хеш — берём первую как образец
             lines.append(
                 f"[{index}] тип: {_kind_label(group.kind)}, {len(group.records)} копий, "
                 f"размер каждой: {human_readable_size(sample.size)}, "
@@ -57,13 +64,13 @@ class TextReportFormatter(ReportFormatter):
             for record in group.records:
                 lines.append(f"      - {record.path}")
 
-        lines.append("")
+        lines.append("")  # пустая строка-разделитель перед итогами
         lines.append(f"Найдено групп дубликатов: {len(groups)}")
         lines.append(
             f"Суммарный размер лишних копий: "
             f"{human_readable_size(total_wasted)} ({total_wasted} байт)"
         )
-        return "\n".join(lines)
+        return "\n".join(lines)  # склеиваем все строки в один текст
 
 
 class JsonReportFormatter(ReportFormatter):
@@ -71,6 +78,8 @@ class JsonReportFormatter(ReportFormatter):
 
     def format(self, groups: List[DuplicateGroup]) -> str:
         total_wasted = sum(g.wasted_size for g in groups)
+        # Собираем обычный словарь Python — json.dumps() ниже превратит
+        # его в текст в формате JSON.
         payload = {
             "duplicate_groups": [
                 {
@@ -86,4 +95,6 @@ class JsonReportFormatter(ReportFormatter):
             "groups_count": len(groups),
             "total_wasted_bytes": total_wasted,
         }
+        # ensure_ascii=False — не превращать кириллицу в \uXXXX-escape;
+        # indent=2 — красиво форматировать с отступами для читаемости.
         return json.dumps(payload, ensure_ascii=False, indent=2)

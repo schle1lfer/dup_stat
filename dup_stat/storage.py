@@ -34,14 +34,18 @@ def make_timestamp() -> str:
 
 def _rows_from_groups(groups: List[DuplicateGroup]) -> Iterator[Dict]:
     """Разворачивает группы дубликатов (файлов и директорий) в плоские
-    строки — общий формат данных, который переиспользуют все экспортёры."""
+    строки — общий формат данных, который переиспользуют все экспортёры.
+
+    Это генератор (yield) — строки отдаются по одной, а не собираются
+    сразу все в памяти.
+    """
     for group_id, group in enumerate(groups, start=1):
-        for record in group.records:
+        for record in group.records:  # у каждой группы — несколько записей-копий
             yield {
                 "group_id": group_id,
-                "kind": group.kind.value,
+                "kind": group.kind.value,  # "file" или "directory"
                 "file_hash": record.file_hash,
-                "path": str(record.path),
+                "path": str(record.path),  # Path -> строка, чтобы сохранить в БД/DataFrame
                 "name": record.name,
                 "size_bytes": record.size,
                 "mtime": record.mtime,
@@ -59,17 +63,25 @@ class ResultExporter(ABC):
 
 
 class SqliteResultExporter(ResultExporter):
-    """Сохраняет результаты в файл SQLite: '<prefix>_<timestamp>.sqlite3'."""
+    """Сохраняет результаты в файл SQLite: '<prefix>_<timestamp>.sqlite3'.
+
+    SQLite — это база данных, которая целиком хранится в одном файле,
+    без отдельного сервера (в отличие от, например, PostgreSQL).
+    """
 
     def __init__(self, filename_prefix: str = "dup_stat_results"):
         self._filename_prefix = filename_prefix
 
     def export(self, groups: List[DuplicateGroup], output_dir: Path, timestamp: str) -> Path:
         output_dir = Path(output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
+        output_dir.mkdir(parents=True, exist_ok=True)  # создать папку, если её ещё нет
         db_path = output_dir / f"{self._filename_prefix}_{timestamp}.sqlite3"
 
+        # sqlite3.connect() открывает (или создаёт) файл базы данных.
+        # "with ... as conn" гарантирует, что соединение будет закрыто
+        # автоматически, даже если внутри случится ошибка.
         with sqlite3.connect(db_path) as conn:
+            # CREATE TABLE — создаёт таблицу с описанными колонками и их типами.
             conn.execute(
                 """
                 CREATE TABLE duplicate_entries (
@@ -84,6 +96,10 @@ class SqliteResultExporter(ResultExporter):
                 )
                 """
             )
+            # executemany() вставляет сразу много строк за один вызов —
+            # быстрее, чем делать INSERT в цикле. :group_id и т.д. —
+            # именованные "заглушки", которые sqlite3 сам подставит
+            # значениями из словарей (защита от SQL-инъекций).
             conn.executemany(
                 """
                 INSERT INTO duplicate_entries
@@ -93,7 +109,7 @@ class SqliteResultExporter(ResultExporter):
                 """,
                 list(_rows_from_groups(groups)),
             )
-            conn.commit()
+            conn.commit()  # сохраняет изменения на диск
 
         return db_path
 
@@ -110,6 +126,9 @@ class DataFrameResultExporter(ResultExporter):
         self._filename_prefix = filename_prefix
 
     def export(self, groups: List[DuplicateGroup], output_dir: Path, timestamp: str) -> Path:
+        # pandas — необязательная зависимость, поэтому импортируем её
+        # прямо здесь, а не в начале файла: если pandas не установлен,
+        # но эта функция не вызывается — ничего не сломается.
         try:
             import pandas as pd
         except ImportError as exc:
@@ -122,8 +141,8 @@ class DataFrameResultExporter(ResultExporter):
         output_dir.mkdir(parents=True, exist_ok=True)
         pkl_path = output_dir / f"{self._filename_prefix}_{timestamp}.pkl"
 
-        df = pd.DataFrame(list(_rows_from_groups(groups)))
-        df.to_pickle(pkl_path)
+        df = pd.DataFrame(list(_rows_from_groups(groups)))  # список словарей -> таблица pandas
+        df.to_pickle(pkl_path)  # сохраняем таблицу в файл
 
         return pkl_path
 
@@ -135,6 +154,8 @@ class ResultPersistence:
         self._exporters = exporters
 
     def save_all(self, groups: List[DuplicateGroup], output_dir: Path) -> List[Path]:
-        timestamp = make_timestamp()
+        """Сохраняет один и тот же результат через все переданные
+        экспортёры, с одинаковой меткой времени в именах файлов."""
+        timestamp = make_timestamp()  # считаем один раз — на все экспортёры сразу
         output_dir = Path(output_dir)
         return [exporter.export(groups, output_dir, timestamp) for exporter in self._exporters]

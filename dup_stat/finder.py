@@ -61,51 +61,66 @@ class DuplicateFinder:
         hash_computation: Optional[HashComputationStrategy] = None,
         partial_hash_bytes: int = DEFAULT_PARTIAL_HASH_BYTES,
     ):
+        # Все зависимости передаются снаружи (через аргументы __init__),
+        # а не создаются внутри класса — это и есть Dependency Injection:
+        # DuplicateFinder не привязан к конкретной реализации сканера/хешера.
         self._scanner = scanner
         self._hasher = hasher
         self._key_strategy = key_strategy
+        # "or" здесь — если hash_computation не передали (None),
+        # используем реализацию по умолчанию.
         self._hash_computation = hash_computation or ThreadPoolHashComputation()
         self._partial_hash_bytes = partial_hash_bytes
 
     def find(self, root: Path) -> List[DuplicateGroup]:
+        """Простой способ получить только список групп-дубликатов."""
         return self.find_files(root).groups
 
     def find_files(self, root: Path) -> FileScanResult:
-        sizes = self._scan_sizes(root)
-        size_candidates = self._filter_by_size(sizes)
-        partial_candidates = self._filter_by_partial_hash(size_candidates, sizes)
-        records = self._build_records(partial_candidates)
-        groups = self._group_by_key(records)
+        """Полный поиск в три стадии (см. описание модуля выше)."""
+        sizes = self._scan_sizes(root)                              # шаг 0: узнать размер каждого файла
+        size_candidates = self._filter_by_size(sizes)                # стадия 1: отсеять уникальные размеры
+        partial_candidates = self._filter_by_partial_hash(size_candidates, sizes)  # стадия 2
+        records = self._build_records(partial_candidates)            # стадия 3: полный хеш
+        groups = self._group_by_key(records)                         # собрать в группы дубликатов
         return FileScanResult(groups=groups, sizes=sizes, hashed_records=records)
 
     def _scan_sizes(self, root: Path) -> Dict[Path, int]:
+        """Обходит директорию и запоминает размер каждого файла: {путь: размер}."""
         sizes: Dict[Path, int] = {}
         for path in self._scanner.scan(root):
             try:
                 sizes[path] = path.stat().st_size
             except OSError:
-                continue
+                continue  # файл мог исчезнуть между сканированием и этой строкой — пропускаем
         return sizes
 
-    @staticmethod
+    @staticmethod  # не использует self — не зависит от состояния конкретного объекта
     def _filter_by_size(sizes: Dict[Path, int]) -> List[Path]:
+        """Оставляет только файлы, у которых размер совпадает хотя бы
+        ещё с одним файлом — остальные точно не могут быть дубликатами."""
         by_size = group_by(sizes.keys(), key_fn=lambda p: sizes[p])
         return drop_singleton_groups(by_size)
 
     def _filter_by_partial_hash(self, paths: List[Path], sizes: Dict[Path, int]) -> List[Path]:
+        """Дополнительно отсеивает файлы по хешу первых байт — дешевле,
+        чем сразу читать и хешировать файл целиком."""
         if not paths or self._partial_hash_bytes <= 0:
-            return paths
+            return paths  # стадия отключена (partial_hash_bytes=0) или нечего проверять
 
         partial_hashes = self._hash_computation.compute_many(
             paths, self._hasher, max_bytes=self._partial_hash_bytes
         )
         readable_paths = list(partial_hashes.keys())
+        # Группируем по паре (размер, хеш первых байт) — совпадать должно и то, и другое.
         by_partial: Dict[Tuple[int, str], List[Path]] = group_by(
             readable_paths, key_fn=lambda p: (sizes[p], partial_hashes[p])
         )
         return drop_singleton_groups(by_partial)
 
     def _build_records(self, paths: List[Path]) -> List[FileRecord]:
+        """Считает полный хеш для оставшихся кандидатов и оборачивает
+        каждый файл в FileRecord (со всеми его атрибутами)."""
         hashes = self._hash_computation.compute_many(paths, self._hasher, max_bytes=None)
         records: List[FileRecord] = []
         for path, file_hash in hashes.items():
@@ -116,10 +131,12 @@ class DuplicateFinder:
         return records
 
     def _group_by_key(self, records: List[FileRecord]) -> List[DuplicateGroup]:
+        """Финальный шаг: объединяет записи с одинаковым ключом
+        (см. matching.py) в группы дубликатов."""
         groups = group_by(records, key_fn=self._key_strategy.key)
         duplicate_groups = [
             DuplicateGroup(key=key, records=sorted(recs, key=lambda r: str(r.path)))
             for key, recs in groups.items()
-            if len(recs) > 1
+            if len(recs) > 1  # группа из одного файла — это не дубликат
         ]
         return sort_groups_by_size_desc(duplicate_groups)

@@ -1,8 +1,11 @@
 """Мелкие переиспользуемые хелперы (DRY)."""
 
-from collections import defaultdict
+from collections import defaultdict  # словарь, который сам создаёт пустое значение для нового ключа
 from typing import Callable, Dict, Iterable, List, TypeVar
 
+# TypeVar — "переменная типа": T и K означают "любой тип", подставляемый
+# при вызове функции (это нужно только для подсказок типов, на работу
+# кода не влияет).
 T = TypeVar("T")
 K = TypeVar("K")
 
@@ -10,15 +13,23 @@ K = TypeVar("K")
 def human_readable_size(num_bytes: float) -> str:
     """Форматирует размер в байтах в человекочитаемый вид (KB/MB/...)."""
     value = float(num_bytes)
+    # Пока значение больше 1024 — переходим к следующей более крупной единице.
     for unit in ("B", "KB", "MB", "GB", "TB", "PB"):
         if abs(value) < 1024.0:
-            return f"{value:.2f} {unit}"
+            return f"{value:.2f} {unit}"  # .2f — округление до двух знаков после запятой
         value /= 1024.0
-    return f"{value:.2f} EB"
+    return f"{value:.2f} EB"  # на случай совсем огромных чисел (эксабайты)
 
 
 def group_by(items: Iterable[T], key_fn: Callable[[T], K]) -> Dict[K, List[T]]:
-    """Группирует элементы по значению key_fn(item), сохраняя порядок внутри группы."""
+    """Группирует элементы по значению key_fn(item), сохраняя порядок внутри группы.
+
+    key_fn — функция, которая для каждого элемента возвращает его "ключ
+    группировки" (например, размер файла). Элементы с одинаковым ключом
+    попадают в один список.
+    """
+    # defaultdict(list) — как обычный словарь, но при обращении к
+    # несуществующему ключу сам создаёт для него пустой список [].
     groups: Dict[K, List[T]] = defaultdict(list)
     for item in items:
         groups[key_fn(item)].append(item)
@@ -33,4 +44,7 @@ def drop_singleton_groups(groups: Dict[K, List[T]]) -> List[T]:
     текущему критерию, точно не дубликат, и его незачем анализировать
     дальше — благодаря этому в поиск попадают только реальные кандидаты.
     """
+    # Это "list comprehension" — короткая запись цикла, создающего список.
+    # Разворачиваем так: для каждой группы длиннее 1 элемента — берём
+    # все её элементы, остальные группы (одиночки) пропускаем.
     return [item for group in groups.values() if len(group) > 1 for item in group]
