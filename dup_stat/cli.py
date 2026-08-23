@@ -9,10 +9,12 @@ import argparse
 import sys
 from pathlib import Path
 
+from .directory_finder import DirectoryDuplicateFinder, filter_subsumed_file_groups
 from .finder import DEFAULT_PARTIAL_HASH_BYTES, DuplicateFinder
 from .hash_computation import ThreadPoolHashComputation
 from .hashing import DEFAULT_CHUNK_SIZE, HashlibFileHasher
 from .matching import MATCH_PRESETS, create_strategy
+from .models import sort_groups_by_size_desc
 from .reporting import JsonReportFormatter, ReportFormatter, TextReportFormatter
 from .scanning import RecursiveFileScanner
 from .storage import DataFrameResultExporter, ResultPersistence, SqliteResultExporter
@@ -21,7 +23,10 @@ from .storage import DataFrameResultExporter, ResultPersistence, SqliteResultExp
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="dup_stat",
-        description="Поиск файлов-дубликатов в директории по хешсумме и другим атрибутам.",
+        description=(
+            "Поиск файлов-дубликатов в директории по хешсумме и другим атрибутам, "
+            "а также директорий, полностью дублирующих друг друга (--no-dirs отключает)."
+        ),
     )
     parser.add_argument("directory", type=Path, help="Директория для сканирования")
     parser.add_argument(
@@ -89,6 +94,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--no-dirs",
+        dest="find_directories",
+        action="store_false",
+        default=True,
+        help=(
+            "Не искать директории-полные-дубликаты (по умолчанию включено). "
+            "Директория считается дубликатом другой, если у них полностью "
+            "совпадают структура и содержимое всех файлов рекурсивно."
+        ),
+    )
+    parser.add_argument(
         "--save-dir",
         type=Path,
         default=None,
@@ -136,10 +152,18 @@ def main(argv=None) -> int:
     )
 
     try:
-        groups = finder.find(args.directory)
+        scan_result = finder.find_files(args.directory)
     except (NotADirectoryError, OSError) as exc:
         print(f"Ошибка: {exc}", file=sys.stderr)
         return 1
+
+    groups = list(scan_result.groups)
+    if args.find_directories:
+        directory_groups = DirectoryDuplicateFinder().find(
+            args.directory, scan_result.sizes, scan_result.hashed_records
+        )
+        file_groups = filter_subsumed_file_groups(groups, directory_groups)
+        groups = sort_groups_by_size_desc(file_groups + directory_groups)
 
     formatter = _build_formatter(args.format)
     print(formatter.format(groups))

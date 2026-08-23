@@ -4,17 +4,30 @@ ReportFormatter — интерфейс (OCP): чтобы добавить нов
 (например, CSV), достаточно реализовать новый класс, не трогая CLI
 или логику поиска.
 
-Порядок групп здесь не переопределяется: DuplicateFinder.find() уже
-возвращает их отсортированными по размеру файла по убыванию — форматтер
+Порядок групп здесь не переопределяется: DuplicateFinder/DirectoryDuplicateFinder
+уже возвращают их отсортированными по размеру по убыванию — форматтер
 просто выводит переданный порядок как есть (DRY, единая точка сортировки).
+
+Группы файлов и группы директорий (DuplicateGroup.kind) выводятся
+единообразно — разница только в подписи типа записи, чтобы было видно,
+что "такая-то директория — дубликат такой-то" (см. EntryKind).
 """
 
 from abc import ABC, abstractmethod
 import json
 from typing import List
 
-from .models import DuplicateGroup
+from .models import DuplicateGroup, EntryKind
 from .utils import human_readable_size
+
+_KIND_LABELS = {
+    EntryKind.FILE: "файл",
+    EntryKind.DIRECTORY: "директория",
+}
+
+
+def _kind_label(kind: EntryKind) -> str:
+    return _KIND_LABELS.get(kind, kind.value)
 
 
 class ReportFormatter(ABC):
@@ -37,8 +50,8 @@ class TextReportFormatter(ReportFormatter):
             total_wasted += group.wasted_size
             sample = group.records[0]
             lines.append(
-                f"[{index}] {len(group.records)} файлов, "
-                f"размер каждого: {human_readable_size(sample.size)}, "
+                f"[{index}] тип: {_kind_label(group.kind)}, {len(group.records)} копий, "
+                f"размер каждой: {human_readable_size(sample.size)}, "
                 f"хеш: {sample.file_hash}"
             )
             for record in group.records:
@@ -61,11 +74,12 @@ class JsonReportFormatter(ReportFormatter):
         payload = {
             "duplicate_groups": [
                 {
+                    "kind": group.kind.value,
                     "hash": group.records[0].file_hash,
                     "size_bytes": group.records[0].size,
                     "count": len(group.records),
                     "wasted_bytes": group.wasted_size,
-                    "files": [str(r.path) for r in group.records],
+                    "paths": [str(r.path) for r in group.records],
                 }
                 for group in groups
             ],

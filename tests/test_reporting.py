@@ -2,11 +2,11 @@ import json
 import unittest
 from pathlib import Path
 
-from dup_stat.models import DuplicateGroup, FileRecord
+from dup_stat.models import DuplicateGroup, EntryKind, FileRecord
 from dup_stat.reporting import JsonReportFormatter, TextReportFormatter
 
 
-def _group(size: int, count: int = 2) -> DuplicateGroup:
+def _group(size: int, count: int = 2, kind: EntryKind = EntryKind.FILE) -> DuplicateGroup:
     records = [
         FileRecord(
             path=Path(f"file_{size}_{i}.bin"),
@@ -17,7 +17,7 @@ def _group(size: int, count: int = 2) -> DuplicateGroup:
         )
         for i in range(count)
     ]
-    return DuplicateGroup(key=(f"hash-{size}",), records=records)
+    return DuplicateGroup(key=(f"hash-{size}",), records=records, kind=kind)
 
 
 class ReportFormatterOrderingTests(unittest.TestCase):
@@ -45,6 +45,26 @@ class ReportFormatterOrderingTests(unittest.TestCase):
         payload = json.loads(JsonReportFormatter().format(reversed_groups))
         sizes = [g["size_bytes"] for g in payload["duplicate_groups"]]
         self.assertEqual(sizes, [10, 100, 1000])
+
+
+class KindLabellingTests(unittest.TestCase):
+    def test_json_includes_kind_field_for_files_and_directories(self):
+        groups = [_group(100, kind=EntryKind.FILE), _group(50, kind=EntryKind.DIRECTORY)]
+        payload = json.loads(JsonReportFormatter().format(groups))
+        kinds = [g["kind"] for g in payload["duplicate_groups"]]
+        self.assertEqual(kinds, ["file", "directory"])
+
+    def test_json_uses_paths_key(self):
+        payload = json.loads(JsonReportFormatter().format([_group(100)]))
+        self.assertIn("paths", payload["duplicate_groups"][0])
+
+    def test_text_shows_directory_label(self):
+        text = TextReportFormatter().format([_group(100, kind=EntryKind.DIRECTORY)])
+        self.assertIn("тип: директория", text)
+
+    def test_text_shows_file_label(self):
+        text = TextReportFormatter().format([_group(100, kind=EntryKind.FILE)])
+        self.assertIn("тип: файл", text)
 
 
 if __name__ == "__main__":

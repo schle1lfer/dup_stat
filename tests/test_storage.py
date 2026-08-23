@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from dup_stat.models import DuplicateGroup, FileRecord
+from dup_stat.models import DuplicateGroup, EntryKind, FileRecord
 from dup_stat.storage import (
     DataFrameResultExporter,
     ResultPersistence,
@@ -52,12 +52,30 @@ class SqliteResultExporterTests(unittest.TestCase):
             with sqlite3.connect(db_path) as conn:
                 rows = conn.execute(
                     "SELECT group_id, file_hash, path, name, size_bytes, wasted_bytes "
-                    "FROM duplicate_files ORDER BY path"
+                    "FROM duplicate_entries ORDER BY path"
                 ).fetchall()
 
             self.assertEqual(len(rows), 2)
             self.assertEqual(rows[0][1], "hash1")
             self.assertEqual(rows[0][5], 10)  # wasted_bytes = size * (count - 1)
+
+    def test_export_includes_kind_column(self):
+        dir_r1 = FileRecord(path=Path("dirA"), name="dirA", size=20, mtime=1.0, file_hash="sig1")
+        dir_r2 = FileRecord(path=Path("dirB"), name="dirB", size=20, mtime=2.0, file_hash="sig1")
+        groups = [
+            DuplicateGroup(key=("hash1",), records=_sample_groups()[0].records, kind=EntryKind.FILE),
+            DuplicateGroup(key=("sig1",), records=[dir_r1, dir_r2], kind=EntryKind.DIRECTORY),
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = SqliteResultExporter().export(groups, Path(tmp), "20260101_000000")
+            with sqlite3.connect(db_path) as conn:
+                kinds = dict(
+                    conn.execute("SELECT DISTINCT path, kind FROM duplicate_entries").fetchall()
+                )
+
+            self.assertEqual(kinds["a.txt"], "file")
+            self.assertEqual(kinds["dirA"], "directory")
 
     def test_export_preserves_given_group_order(self):
         """Экспортёр не переупорядочивает группы — porядок (по размеру,
@@ -68,7 +86,7 @@ class SqliteResultExporterTests(unittest.TestCase):
             db_path = SqliteResultExporter().export(groups, Path(tmp), "20260101_000000")
             with sqlite3.connect(db_path) as conn:
                 rows = conn.execute(
-                    "SELECT DISTINCT group_id, size_bytes FROM duplicate_files ORDER BY group_id"
+                    "SELECT DISTINCT group_id, size_bytes FROM duplicate_entries ORDER BY group_id"
                 ).fetchall()
 
             self.assertEqual(rows, [(1, 1000), (2, 100), (3, 10)])

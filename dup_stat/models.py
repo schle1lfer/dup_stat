@@ -1,13 +1,30 @@
-"""Модели данных: описание файла и группы дубликатов."""
+"""Модели данных: описание файла, группы дубликатов и результата сканирования."""
 
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
-from typing import List, Tuple
+from typing import Dict, List, Tuple
+
+
+class EntryKind(str, Enum):
+    """Что представляет собой запись в группе дубликатов — файл или директория."""
+
+    FILE = "file"
+    DIRECTORY = "directory"
 
 
 @dataclass(frozen=True)
 class FileRecord:
-    """Снимок атрибутов одного файла, нужных для сравнения на дубликаты."""
+    """Снимок атрибутов одной записи (файла или директории), нужных для
+    сравнения на дубликаты и вывода в отчёт.
+
+    Для директорий используется та же структура: path/name — самой
+    директории, size — суммарный размер всех файлов внутри неё
+    рекурсивно, file_hash — не хеш содержимого одного файла, а сигнатура
+    всего поддерева (см. directory_finder.py). Это позволяет остальному
+    коду (reporting.py, storage.py) работать с файлами и директориями
+    единообразно, не зная о разнице (DRY).
+    """
 
     path: Path
     name: str
@@ -29,10 +46,11 @@ class FileRecord:
 
 @dataclass
 class DuplicateGroup:
-    """Группа файлов, признанных дубликатами друг друга по выбранному критерию."""
+    """Группа файлов или директорий, признанных дубликатами друг друга."""
 
     key: Tuple
     records: List[FileRecord] = field(default_factory=list)
+    kind: EntryKind = EntryKind.FILE
 
     @property
     def size_per_copy(self) -> int:
@@ -49,3 +67,24 @@ class DuplicateGroup:
         if len(self.records) < 2:
             return 0
         return self.size_per_copy * (len(self.records) - 1)
+
+
+def sort_groups_by_size_desc(groups: List[DuplicateGroup]) -> List[DuplicateGroup]:
+    """Единая точка сортировки результата — по размеру копии, по убыванию.
+
+    Используется и для файловых, и для директорийных групп, чтобы при
+    объединении результатов (см. cli.py) не было двух разных мест,
+    решающих, в каком порядке идёт вывод (DRY).
+    """
+    return sorted(groups, key=lambda g: g.size_per_copy, reverse=True)
+
+
+@dataclass
+class FileScanResult:
+    """Результат файлового поиска дубликатов вместе с промежуточными
+    данными, которые нужны DirectoryDuplicateFinder, чтобы не считать
+    хеши файлов повторно (см. directory_finder.py)."""
+
+    groups: List[DuplicateGroup]
+    sizes: Dict[Path, int]
+    hashed_records: List[FileRecord]

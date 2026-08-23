@@ -30,6 +30,13 @@ find() всегда возвращает группы, отсортирован�
 Это единственное место, где применяется сортировка — благодаря этому
 она автоматически действует и в отчётах (reporting.py), и при
 сохранении результатов (storage.py), без дублирования логики (DRY).
+
+find_files() — то же самое, но вместе с промежуточными данными
+(FileScanResult: все размеры и все реально посчитанные полные хеши).
+Их переиспользует DirectoryDuplicateFinder (directory_finder.py) для
+поиска директорий-дубликатов, не считая ни одного хеша повторно;
+find() — просто тонкая обёртка над find_files() для обратной
+совместимости и для случаев, когда директории не нужны.
 """
 
 from pathlib import Path
@@ -38,7 +45,7 @@ from typing import Dict, List, Optional, Tuple
 from .hash_computation import HashComputationStrategy, ThreadPoolHashComputation
 from .hashing import FileHasher
 from .matching import DuplicateKeyStrategy
-from .models import DuplicateGroup, FileRecord
+from .models import DuplicateGroup, FileRecord, FileScanResult, sort_groups_by_size_desc
 from .scanning import FileScanner
 from .utils import drop_singleton_groups, group_by
 
@@ -61,11 +68,15 @@ class DuplicateFinder:
         self._partial_hash_bytes = partial_hash_bytes
 
     def find(self, root: Path) -> List[DuplicateGroup]:
+        return self.find_files(root).groups
+
+    def find_files(self, root: Path) -> FileScanResult:
         sizes = self._scan_sizes(root)
         size_candidates = self._filter_by_size(sizes)
         partial_candidates = self._filter_by_partial_hash(size_candidates, sizes)
         records = self._build_records(partial_candidates)
-        return self._group_by_key(records)
+        groups = self._group_by_key(records)
+        return FileScanResult(groups=groups, sizes=sizes, hashed_records=records)
 
     def _scan_sizes(self, root: Path) -> Dict[Path, int]:
         sizes: Dict[Path, int] = {}
@@ -111,4 +122,4 @@ class DuplicateFinder:
             for key, recs in groups.items()
             if len(recs) > 1
         ]
-        return sorted(duplicate_groups, key=lambda g: g.size_per_copy, reverse=True)
+        return sort_groups_by_size_desc(duplicate_groups)

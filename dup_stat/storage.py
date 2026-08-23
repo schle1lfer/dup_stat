@@ -33,12 +33,13 @@ def make_timestamp() -> str:
 
 
 def _rows_from_groups(groups: List[DuplicateGroup]) -> Iterator[Dict]:
-    """Разворачивает группы дубликатов в плоские строки — общий формат
-    данных, который переиспользуют все экспортёры."""
+    """Разворачивает группы дубликатов (файлов и директорий) в плоские
+    строки — общий формат данных, который переиспользуют все экспортёры."""
     for group_id, group in enumerate(groups, start=1):
         for record in group.records:
             yield {
                 "group_id": group_id,
+                "kind": group.kind.value,
                 "file_hash": record.file_hash,
                 "path": str(record.path),
                 "name": record.name,
@@ -71,8 +72,9 @@ class SqliteResultExporter(ResultExporter):
         with sqlite3.connect(db_path) as conn:
             conn.execute(
                 """
-                CREATE TABLE duplicate_files (
+                CREATE TABLE duplicate_entries (
                     group_id     INTEGER NOT NULL,
+                    kind         TEXT    NOT NULL,
                     file_hash    TEXT    NOT NULL,
                     path         TEXT    NOT NULL,
                     name         TEXT    NOT NULL,
@@ -84,10 +86,10 @@ class SqliteResultExporter(ResultExporter):
             )
             conn.executemany(
                 """
-                INSERT INTO duplicate_files
-                    (group_id, file_hash, path, name, size_bytes, mtime, wasted_bytes)
+                INSERT INTO duplicate_entries
+                    (group_id, kind, file_hash, path, name, size_bytes, mtime, wasted_bytes)
                 VALUES
-                    (:group_id, :file_hash, :path, :name, :size_bytes, :mtime, :wasted_bytes)
+                    (:group_id, :kind, :file_hash, :path, :name, :size_bytes, :mtime, :wasted_bytes)
                 """,
                 list(_rows_from_groups(groups)),
             )
