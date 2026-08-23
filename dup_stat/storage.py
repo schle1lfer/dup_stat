@@ -8,7 +8,11 @@ _rows_from_groups, чтобы не дублировать преобразова
 
 ResultPersistence — единственное место, где генерируется timestamp,
 поэтому все экспортёры одного запуска получают одну и ту же метку
-времени и их файлы легко сопоставить друг с другом по имени.
+времени и их файлы легко сопоставить друг с другом по имени. В режиме
+--append-timestamp (см. cli.py) новый timestamp дописывается к
+переданному через "_", а не заменяет его — так имя файла со временем
+превращается в цепочку timestamp'ов всех запусков, из которых собраны
+эти данные.
 
 Порядок строк здесь не переопределяется: DuplicateFinder.find() уже
 возвращает группы отсортированными по размеру файла по убыванию (см.
@@ -22,7 +26,7 @@ from datetime import datetime
 import json
 from pathlib import Path
 import sqlite3
-from typing import Dict, Iterator, List
+from typing import Dict, Iterator, List, Optional
 
 from .models import DuplicateGroup
 
@@ -231,10 +235,30 @@ class ResultPersistence:
     def __init__(self, exporters: List[ResultExporter]):
         self._exporters = exporters
 
-    def save_all(self, groups: List[DuplicateGroup], output_dir: Path) -> PersistenceResult:
+    def save_all(
+        self,
+        groups: List[DuplicateGroup],
+        output_dir: Path,
+        previous_timestamp: Optional[str] = None,
+    ) -> PersistenceResult:
         """Сохраняет один и тот же результат через все переданные
-        экспортёры, с одинаковой меткой времени в именах файлов."""
-        timestamp = make_timestamp()  # считаем один раз — на все экспортёры сразу
+        экспортёры, с одинаковой меткой времени в именах файлов.
+
+        Если previous_timestamp не задан (обычный запуск) — используется
+        просто свежий timestamp, как раньше.
+
+        Если previous_timestamp задан (режим --append-timestamp в CLI —
+        см. cli.py/result_merge.py) — новый timestamp ДОПИСЫВАЕТСЯ к нему
+        через "_", а не заменяет его: '<previous_timestamp>_<новый>'. Так
+        имя файла превращается в растущую цепочку всех timestamp'ов,
+        через которые прошли эти данные — например, после трёх слияний:
+        'dup_stat_results_20260101_100000_20260102_110000_20260103_120000.json'.
+        Старый файл (с именем без последнего добавленного timestamp) при
+        этом никак не трогается — сохраняется только новый, с более
+        длинным именем.
+        """
+        new_timestamp = make_timestamp()  # считаем один раз — на все экспортёры сразу
+        timestamp = f"{previous_timestamp}_{new_timestamp}" if previous_timestamp else new_timestamp
         output_dir = Path(output_dir)
 
         result = PersistenceResult()

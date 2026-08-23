@@ -188,6 +188,47 @@ class ResultPersistenceTests(unittest.TestCase):
             for path in paths:
                 self.assertTrue(path.exists())
 
+    def test_previous_timestamp_is_prepended_not_replaced(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            result = ResultPersistence([SqliteResultExporter()]).save_all(
+                _sample_groups(), out_dir, previous_timestamp="20260101_000000"
+            )
+
+            self.assertEqual(len(result.saved), 1)
+            name = result.saved[0].name
+            self.assertTrue(
+                name.startswith("dup_stat_results_20260101_000000_"),
+                f"Ожидали цепочку timestamp'ов в имени, получили: {name}",
+            )
+            # После префикса должен идти ЕЩЁ ОДИН свежий timestamp, а не пустота.
+            prefix_len = len("dup_stat_results_20260101_000000_")
+            new_part = name[prefix_len:-len(".sqlite3")]
+            self.assertRegex(new_part, TIMESTAMP_RE)
+
+    def test_chaining_can_be_applied_repeatedly(self):
+        """Имитирует несколько последовательных --append-timestamp:
+        цепочка timestamp'ов в имени должна расти с каждым разом."""
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            persistence = ResultPersistence([JsonResultExporter()])
+
+            first = persistence.save_all(_sample_groups(), out_dir).saved[0]
+            first_ts = first.stem[len("dup_stat_results_"):]
+
+            second = persistence.save_all(_sample_groups(), out_dir, previous_timestamp=first_ts).saved[0]
+            second_ts = second.stem[len("dup_stat_results_"):]
+            self.assertTrue(second_ts.startswith(first_ts + "_"))
+
+            third = persistence.save_all(_sample_groups(), out_dir, previous_timestamp=second_ts).saved[0]
+            third_ts = third.stem[len("dup_stat_results_"):]
+            self.assertTrue(third_ts.startswith(second_ts + "_"))
+
+            # Все три файла — разные, ни один не перезаписан.
+            self.assertEqual(len({first, second, third}), 3)
+            for path in (first, second, third):
+                self.assertTrue(path.exists())
+
     def test_failing_exporter_is_skipped_without_blocking_others(self):
         """Один экспортёр без нужной зависимости не должен мешать
         сохранить остальные форматы."""
