@@ -17,7 +17,13 @@ from .matching import MATCH_PRESETS, create_strategy
 from .models import sort_groups_by_size_desc
 from .reporting import JsonReportFormatter, ReportFormatter, TextReportFormatter
 from .scanning import RecursiveFileScanner
-from .storage import DataFrameResultExporter, ResultPersistence, SqliteResultExporter
+from .storage import (
+    DataFrameResultExporter,
+    ExcelResultExporter,
+    JsonResultExporter,
+    ResultPersistence,
+    SqliteResultExporter,
+)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -113,10 +119,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="DIR",
         help=(
-            "Дополнительно сохранить результаты локально в DIR: "
-            "файл SQLite ('dup_stat_results_<timestamp>.sqlite3') и "
-            "pandas.DataFrame ('dup_stat_results_<timestamp>.pkl'). "
-            "Оба файла одного запуска получают одинаковый timestamp."
+            "Дополнительно сохранить результаты локально в DIR сразу в "
+            "4 форматах с одинаковым timestamp в имени: "
+            "SQLite ('..._<timestamp>.sqlite3'), JSON ('..._<timestamp>.json'), "
+            "pandas.DataFrame ('..._<timestamp>.pkl') и Excel ('..._<timestamp>.xlsx'). "
+            "Форматы, для которых не хватает опциональной зависимости "
+            "(pandas/openpyxl), пропускаются без остановки остальных."
         ),
     )
     return parser
@@ -183,16 +191,23 @@ def main(argv=None) -> int:
     print(formatter.format(groups))
 
     if args.save_dir is not None:
-        persistence = ResultPersistence([SqliteResultExporter(), DataFrameResultExporter()])
-        try:
-            saved_paths = persistence.save_all(groups, args.save_dir)
-        except ImportError as exc:
-            print(f"Ошибка: {exc}", file=sys.stderr)
-            return 1
-        for path in saved_paths:
+        # SQLite и JSON не требуют опциональных зависимостей — идут первыми,
+        # чтобы точно сохраниться, даже если pandas/openpyxl не установлены.
+        persistence = ResultPersistence(
+            [
+                SqliteResultExporter(),
+                JsonResultExporter(),
+                DataFrameResultExporter(),
+                ExcelResultExporter(),
+            ]
+        )
+        save_result = persistence.save_all(groups, args.save_dir)
+        for path in save_result.saved:
             # В stderr, а не в stdout — чтобы не мешать выводу отчёта,
             # если его перенаправляют в файл (> report.txt).
             print(f"Сохранено: {path}", file=sys.stderr)
+        for message in save_result.skipped:
+            print(f"Пропущено: {message}", file=sys.stderr)
 
     return 0
 

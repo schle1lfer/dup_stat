@@ -1,9 +1,17 @@
 # dup_stat не имеет обязательных зависимостей — используется только
-# стандартная библиотека Python (>=3.8).
+# стандартная библиотека Python (>=3.8). SQLite и JSON (--save-dir)
+# сохраняются без единой внешней зависимости.
 #
-# Этот файл нужен только для запуска Jupyter-ноутбука в notebooks/.
+# Этот файл нужен только для:
+#   - запуска Jupyter-ноутбука в notebooks/;
+#   - сохранения результатов через --save-dir в pandas.DataFrame (.pkl)
+#     и Excel (.xlsx) — без pandas/openpyxl эти два формата просто
+#     пропускаются с понятным сообщением, остальное (.sqlite3, .json)
+#     сохраняется в любом случае.
+#
 # Установка: pip install -r requirements.txt
 jupyter
 pandas
+openpyxl
 matplotlib
 nbconvert

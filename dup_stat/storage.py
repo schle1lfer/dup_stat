@@ -1,4 +1,4 @@
-"""Сохранение найденных дубликатов в локальные файлы (SQLite, pandas).
+"""Сохранение найденных дубликатов в локальные файлы (SQLite, pandas, Excel, JSON).
 
 Как и остальные части проекта, экспорт построен на абстракции
 ResultExporter (OCP — новый формат добавляется новым классом, ничего
@@ -17,7 +17,9 @@ finder.py), поэтому group_id=1 в сохранённых файлах в�
 """
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from datetime import datetime
+import json
 from pathlib import Path
 import sqlite3
 from typing import Dict, Iterator, List
@@ -53,6 +55,20 @@ def _rows_from_groups(groups: List[DuplicateGroup]) -> Iterator[Dict]:
             }
 
 
+def _build_dataframe(groups: List[DuplicateGroup]):
+    """Общая часть для DataFrameResultExporter и ExcelResultExporter —
+    оба сохраняют, по сути, одну и ту же таблицу, только в разные
+    файлы (DRY: не дублируем построение DataFrame в двух местах)."""
+    try:
+        import pandas as pd
+    except ImportError as exc:
+        raise ImportError(
+            "Для сохранения результатов в pandas.DataFrame/Excel нужен пакет pandas. "
+            "Установите его: pip install pandas"
+        ) from exc
+    return pd.DataFrame(list(_rows_from_groups(groups)))
+
+
 class ResultExporter(ABC):
     """Сохраняет найденные группы дубликатов в файл на диске."""
 
@@ -67,6 +83,7 @@ class SqliteResultExporter(ResultExporter):
 
     SQLite — это база данных, которая целиком хранится в одном файле,
     без отдельного сервера (в отличие от, например, PostgreSQL).
+    Зависимостей не требует — sqlite3 входит в стандартную библиотеку Python.
     """
 
     def __init__(self, filename_prefix: str = "dup_stat_results"):
@@ -114,6 +131,31 @@ class SqliteResultExporter(ResultExporter):
         return db_path
 
 
+class JsonResultExporter(ResultExporter):
+    """Сохраняет результаты в файл JSON: '<prefix>_<timestamp>.json'.
+
+    Не требует pandas — та же плоская таблица, что и в SQLite, просто
+    в виде JSON-массива объектов (удобно для скриптов на любом языке,
+    не только на Python).
+    """
+
+    def __init__(self, filename_prefix: str = "dup_stat_results"):
+        self._filename_prefix = filename_prefix
+
+    def export(self, groups: List[DuplicateGroup], output_dir: Path, timestamp: str) -> Path:
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        json_path = output_dir / f"{self._filename_prefix}_{timestamp}.json"
+
+        rows = list(_rows_from_groups(groups))
+        with json_path.open("w", encoding="utf-8") as f:
+            # ensure_ascii=False — не превращать кириллицу в \uXXXX-escape;
+            # indent=2 — читаемое форматирование с отступами.
+            json.dump(rows, f, ensure_ascii=False, indent=2)
+
+        return json_path
+
+
 class DataFrameResultExporter(ResultExporter):
     """Сохраняет результаты как pandas.DataFrame: '<prefix>_<timestamp>.pkl'.
 
@@ -126,36 +168,78 @@ class DataFrameResultExporter(ResultExporter):
         self._filename_prefix = filename_prefix
 
     def export(self, groups: List[DuplicateGroup], output_dir: Path, timestamp: str) -> Path:
-        # pandas — необязательная зависимость, поэтому импортируем её
-        # прямо здесь, а не в начале файла: если pandas не установлен,
-        # но эта функция не вызывается — ничего не сломается.
-        try:
-            import pandas as pd
-        except ImportError as exc:
-            raise ImportError(
-                "Для сохранения результатов в pandas.DataFrame нужен пакет pandas. "
-                "Установите его: pip install pandas"
-            ) from exc
+        df = _build_dataframe(groups)  # список словарей -> таблица pandas (бросит ImportError, если нет pandas)
 
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
         pkl_path = output_dir / f"{self._filename_prefix}_{timestamp}.pkl"
 
-        df = pd.DataFrame(list(_rows_from_groups(groups)))  # список словарей -> таблица pandas
         df.to_pickle(pkl_path)  # сохраняем таблицу в файл
 
         return pkl_path
 
 
+class ExcelResultExporter(ResultExporter):
+    """Сохраняет результаты в Excel: '<prefix>_<timestamp>.xlsx'.
+
+    Нужен и pandas (строит таблицу), и дополнительно пакет openpyxl
+    (умеет писать сам файл .xlsx) — pandas сам его не включает.
+    """
+
+    def __init__(self, filename_prefix: str = "dup_stat_results"):
+        self._filename_prefix = filename_prefix
+
+    def export(self, groups: List[DuplicateGroup], output_dir: Path, timestamp: str) -> Path:
+        df = _build_dataframe(groups)  # бросит ImportError, если нет pandas
+
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        xlsx_path = output_dir / f"{self._filename_prefix}_{timestamp}.xlsx"
+
+        try:
+            df.to_excel(xlsx_path, index=False, sheet_name="duplicates")
+        except ImportError as exc:
+            raise ImportError(
+                "Для сохранения результатов в Excel нужен пакет openpyxl. "
+                "Установите его: pip install openpyxl"
+            ) from exc
+
+        return xlsx_path
+
+
+@dataclass
+class PersistenceResult:
+    """Что получилось при сохранении: какие файлы реально записаны, а
+    какие форматы пришлось пропустить (например, из-за отсутствующей
+    опциональной зависимости) — и почему."""
+
+    saved: List[Path] = field(default_factory=list)
+    skipped: List[str] = field(default_factory=list)  # человекочитаемые причины пропуска
+
+
 class ResultPersistence:
-    """Прогоняет несколько ResultExporter'ов за один вызов с общим timestamp."""
+    """Прогоняет несколько ResultExporter'ов за один вызов с общим timestamp.
+
+    Если одному экспортёру не хватает опциональной зависимости
+    (например, нет pandas или openpyxl), это не должно мешать сохранить
+    результат в остальных доступных форматах — поэтому такой экспортёр
+    просто пропускается (с понятной причиной в PersistenceResult.skipped),
+    а не прерывает работу всех остальных.
+    """
 
     def __init__(self, exporters: List[ResultExporter]):
         self._exporters = exporters
 
-    def save_all(self, groups: List[DuplicateGroup], output_dir: Path) -> List[Path]:
+    def save_all(self, groups: List[DuplicateGroup], output_dir: Path) -> PersistenceResult:
         """Сохраняет один и тот же результат через все переданные
         экспортёры, с одинаковой меткой времени в именах файлов."""
         timestamp = make_timestamp()  # считаем один раз — на все экспортёры сразу
         output_dir = Path(output_dir)
-        return [exporter.export(groups, output_dir, timestamp) for exporter in self._exporters]
+
+        result = PersistenceResult()
+        for exporter in self._exporters:
+            try:
+                result.saved.append(exporter.export(groups, output_dir, timestamp))
+            except ImportError as exc:
+                result.skipped.append(str(exc))
+        return result

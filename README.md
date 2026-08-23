@@ -16,7 +16,7 @@ source .venv/bin/activate        # Windows: .venv\Scripts\activate
 
 pip install --upgrade pip
 pip install -e .                 # ставит сам dup_stat (даёт команду dup-stat)
-pip install -r requirements.txt  # jupyter/pandas/matplotlib для ноутбука
+pip install -r requirements.txt  # jupyter/pandas/openpyxl/matplotlib — ноутбук и Excel-экспорт
 ```
 
 ## Использование
@@ -38,7 +38,7 @@ python -m dup_stat /path/to/directory
 | `--workers` | число потоков для параллельного хеширования; `1` — отключить параллелизм | авто |
 | `--partial-hash-bytes` | размер префикса для предварительного хеша (отсев без чтения файла целиком); `0` — отключить | `65536` |
 | `--no-dirs` | не искать директории-полные-дубликаты | включено |
-| `--save-dir` | дополнительно сохранить результаты локально в директорию (SQLite + pandas.DataFrame) | не сохранять |
+| `--save-dir` | дополнительно сохранить результаты локально в директорию (SQLite + JSON + pandas.DataFrame + Excel) | не сохранять |
 
 Примеры:
 
@@ -52,7 +52,7 @@ python -m dup_stat ~/Downloads --match hash+name
 # JSON-отчёт для дальнейшей обработки
 python -m dup_stat ~/Downloads --format json > report.json
 
-# Сохранить результаты локально: SQLite + pandas.DataFrame с одинаковым timestamp
+# Сохранить результаты локально: SQLite + JSON + pandas.DataFrame + Excel, одинаковый timestamp
 python -m dup_stat ~/Downloads --save-dir ./results
 
 # Не искать директории-дубликаты, только файлы (старое поведение)
@@ -167,20 +167,25 @@ python -m dup_stat ~/Downloads --no-dirs
 
 ## Сохранение результатов локально (`--save-dir`)
 
-Флаг `--save-dir DIR` сохраняет результаты в двух локальных файлах —
-и в SQLite, и как `pandas.DataFrame`, с **одним и тем же timestamp** в
-имени, чтобы файлы одного запуска было легко сопоставить друг с
-другом:
+Флаг `--save-dir DIR` сохраняет результаты сразу в **четырёх**
+локальных файлах — SQLite, JSON, `pandas.DataFrame` и Excel — с
+**одним и тем же timestamp** в имени, чтобы файлы одного запуска было
+легко сопоставить друг с другом:
 
 ```
 DIR/dup_stat_results_20260823_052141.sqlite3
+DIR/dup_stat_results_20260823_052141.json
 DIR/dup_stat_results_20260823_052141.pkl
+DIR/dup_stat_results_20260823_052141.xlsx
 ```
 
-- **`.sqlite3`** — таблица `duplicate_entries` (`group_id, kind, file_hash,
-  path, name, size_bytes, mtime, wasted_bytes`); одна строка на файл или
-  директорию (`kind` = `file` / `directory`). Открыть можно любым
-  SQLite-клиентом или `sqlite3` из stdlib:
+Во всех форматах — одна и та же плоская таблица: `group_id, kind,
+file_hash, path, name, size_bytes, mtime, wasted_bytes`, одна строка
+на файл или директорию (`kind` = `file` / `directory`).
+
+- **`.sqlite3`** — не требует сервера, хранит всё в одном файле,
+  позволяет делать SQL-запросы. Открыть можно любым SQLite-клиентом
+  или `sqlite3` из stdlib:
 
   ```python
   import sqlite3
@@ -188,24 +193,40 @@ DIR/dup_stat_results_20260823_052141.pkl
   conn.execute("SELECT * FROM duplicate_entries WHERE kind = 'directory'").fetchall()
   ```
 
-- **`.pkl`** — тот же набор строк, сохранённый как `pandas.DataFrame`
-  через `to_pickle` (сохраняет типы колонок в отличие от CSV).
-  Загружается одной командой:
+- **`.json`** — та же таблица в виде JSON-массива объектов, без
+  зависимости от pandas — удобно для скриптов на любом языке:
+
+  ```python
+  import json
+  rows = json.load(open("dup_stat_results_20260823_052141.json", encoding="utf-8"))
+  ```
+
+- **`.pkl`** — сохранён как `pandas.DataFrame` через `to_pickle`
+  (сохраняет типы колонок в отличие от CSV). Загружается одной командой:
 
   ```python
   import pandas as pd
   df = pd.read_pickle("dup_stat_results_20260823_052141.pkl")
   ```
 
-SQLite выбран как основной формат для локального хранения истории
-сканирований: не требует сервера, хранит всё в одном файле, позволяет
-делать SQL-запросы и легко читается тем же `pandas` (`pd.read_sql`).
+- **`.xlsx`** — та же таблица, открывается в Excel/LibreOffice/Google
+  Sheets, либо через pandas: `pd.read_excel("dup_stat_results_20260823_052141.xlsx")`.
+
+`.sqlite3` и `.json` не требуют внешних зависимостей (stdlib). Для
+`.pkl` и `.xlsx` нужны `pandas` (оба формата) и дополнительно
+`openpyxl` (только для `.xlsx`) — если одного из пакетов нет,
+соответствующий формат просто пропускается с понятным сообщением в
+консоли ("Пропущено: ..."), а остальные форматы всё равно сохраняются.
 
 Реализация — в `dup_stat/storage.py`: `ResultExporter` — абстракция
 экспортёра (OCP: новый формат, например CSV или Parquet, добавляется
-новым классом), `SqliteResultExporter` и `DataFrameResultExporter` — её
-реализации, `ResultPersistence` — генерирует общий timestamp и
-прогоняет через него все переданные экспортёры.
+новым классом), `SqliteResultExporter` / `JsonResultExporter` /
+`DataFrameResultExporter` / `ExcelResultExporter` — её реализации
+(`_build_dataframe()` переиспользуется двумя последними, чтобы не
+строить `DataFrame` дважды — DRY). `ResultPersistence` генерирует
+общий timestamp, прогоняет через него все переданные экспортёры и
+возвращает `PersistenceResult(saved=[...], skipped=[...])` — какие
+файлы реально сохранены, а какие форматы пришлось пропустить и почему.
 
 ## Архитектура и принципы SOLID / DRY
 
@@ -220,7 +241,7 @@ SQLite выбран как основной формат для локально
 - `directory_finder.py` — поиск директорий-полных-дубликатов (`DirectoryDuplicateFinder`) поверх уже посчитанных файловых хешей, без единого лишнего чтения с диска; `filter_subsumed_file_groups` убирает файловые группы, покрытые найденным дубликатом-директорией.
 - `reporting.py` — форматирование результата (`ReportFormatter` / `TextReportFormatter` / `JsonReportFormatter`), с меткой типа записи (файл/директория).
 - `utils.py` — общие мелкие хелперы: `human_readable_size`, а также `group_by` / `drop_singleton_groups` — переиспользуемый паттерн "сгруппировать и отбросить одиночные группы", на котором построены все три стадии фильтрации в `finder.py` (DRY).
-- `storage.py` — сохранение результатов в локальные файлы (`ResultExporter` / `SqliteResultExporter` / `DataFrameResultExporter` / `ResultPersistence`).
+- `storage.py` — сохранение результатов в локальные файлы (`ResultExporter` / `SqliteResultExporter` / `JsonResultExporter` / `DataFrameResultExporter` / `ExcelResultExporter` / `ResultPersistence`).
 - `cli.py` — точка сборки: разбор аргументов и связывание конкретных реализаций (единственное место, знающее обо всех классах сразу).
 
 Каждый интерфейс (`FileHasher`, `FileScanner`, `DuplicateKeyStrategy`,

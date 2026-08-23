@@ -1,3 +1,4 @@
+import json
 import re
 import sqlite3
 import tempfile
@@ -7,6 +8,10 @@ from pathlib import Path
 from dup_stat.models import DuplicateGroup, EntryKind, FileRecord
 from dup_stat.storage import (
     DataFrameResultExporter,
+    ExcelResultExporter,
+    JsonResultExporter,
+    PersistenceResult,
+    ResultExporter,
     ResultPersistence,
     SqliteResultExporter,
     make_timestamp,
@@ -18,6 +23,13 @@ try:
     HAS_PANDAS = True
 except ImportError:
     HAS_PANDAS = False
+
+try:
+    import openpyxl  # noqa: F401
+
+    HAS_OPENPYXL = True
+except ImportError:
+    HAS_OPENPYXL = False
 
 TIMESTAMP_RE = re.compile(r"^\d{8}_\d{6}$")
 
@@ -32,6 +44,14 @@ def _make_group(size: int, file_hash: str) -> DuplicateGroup:
     r1 = FileRecord(path=Path(f"{file_hash}_a"), name=f"{file_hash}_a", size=size, mtime=1.0, file_hash=file_hash)
     r2 = FileRecord(path=Path(f"{file_hash}_b"), name=f"{file_hash}_b", size=size, mtime=2.0, file_hash=file_hash)
     return DuplicateGroup(key=(file_hash,), records=[r1, r2])
+
+
+class _AlwaysFailingExporter(ResultExporter):
+    """Тестовый экспортёр, который всегда падает с ImportError — имитирует
+    отсутствующую опциональную зависимость, не трогая настоящий pandas/openpyxl."""
+
+    def export(self, groups, output_dir, timestamp):
+        raise ImportError("тестовая зависимость не установлена")
 
 
 class MakeTimestampTests(unittest.TestCase):
@@ -92,6 +112,29 @@ class SqliteResultExporterTests(unittest.TestCase):
             self.assertEqual(rows, [(1, 1000), (2, 100), (3, 10)])
 
 
+class JsonResultExporterTests(unittest.TestCase):
+    def test_export_writes_expected_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            json_path = JsonResultExporter().export(_sample_groups(), out_dir, "20260101_000000")
+
+            self.assertEqual(json_path.name, "dup_stat_results_20260101_000000.json")
+            with json_path.open("r", encoding="utf-8") as f:
+                rows = json.load(f)
+
+            self.assertEqual(len(rows), 2)
+            self.assertEqual({r["file_hash"] for r in rows}, {"hash1"})
+            self.assertEqual({r["kind"] for r in rows}, {"file"})
+
+    def test_export_does_not_require_pandas(self):
+        # Не проверяем отсутствие pandas напрямую (он может быть
+        # установлен в тестовом окружении) — просто убеждаемся, что
+        # JsonResultExporter работает и без импорта pandas внутри себя.
+        with tempfile.TemporaryDirectory() as tmp:
+            json_path = JsonResultExporter().export(_sample_groups(), Path(tmp), "20260101_000000")
+            self.assertTrue(json_path.exists())
+
+
 @unittest.skipUnless(HAS_PANDAS, "pandas не установлен")
 class DataFrameResultExporterTests(unittest.TestCase):
     def test_export_writes_loadable_dataframe(self):
@@ -108,21 +151,57 @@ class DataFrameResultExporterTests(unittest.TestCase):
             self.assertEqual(set(df["file_hash"]), {"hash1"})
 
 
+@unittest.skipUnless(HAS_PANDAS and HAS_OPENPYXL, "pandas и/или openpyxl не установлены")
+class ExcelResultExporterTests(unittest.TestCase):
+    def test_export_writes_loadable_excel(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            exporter = ExcelResultExporter()
+            xlsx_path = exporter.export(_sample_groups(), out_dir, "20260101_000000")
+
+            self.assertEqual(xlsx_path.name, "dup_stat_results_20260101_000000.xlsx")
+            df = pd.read_excel(xlsx_path)
+
+            self.assertEqual(len(df), 2)
+            self.assertIn("file_hash", df.columns)
+            self.assertEqual(set(df["file_hash"]), {"hash1"})
+
+
 class ResultPersistenceTests(unittest.TestCase):
     def test_all_exporters_share_the_same_timestamp(self):
         with tempfile.TemporaryDirectory() as tmp:
             out_dir = Path(tmp)
-            exporters = [SqliteResultExporter()]
+            exporters = [SqliteResultExporter(), JsonResultExporter()]
             if HAS_PANDAS:
                 exporters.append(DataFrameResultExporter())
+            if HAS_PANDAS and HAS_OPENPYXL:
+                exporters.append(ExcelResultExporter())
 
-            paths = ResultPersistence(exporters).save_all(_sample_groups(), out_dir)
+            result = ResultPersistence(exporters).save_all(_sample_groups(), out_dir)
 
+            self.assertIsInstance(result, PersistenceResult)
+            self.assertEqual(result.skipped, [])
+            paths = result.saved
             timestamps = {p.stem.rsplit("_", 2)[-2] + "_" + p.stem.rsplit("_", 2)[-1] for p in paths}
             self.assertEqual(len(timestamps), 1, f"Разные timestamp в именах файлов: {paths}")
             self.assertRegex(next(iter(timestamps)), TIMESTAMP_RE)
             for path in paths:
                 self.assertTrue(path.exists())
+
+    def test_failing_exporter_is_skipped_without_blocking_others(self):
+        """Один экспортёр без нужной зависимости не должен мешать
+        сохранить остальные форматы."""
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            exporters = [SqliteResultExporter(), _AlwaysFailingExporter(), JsonResultExporter()]
+
+            result = ResultPersistence(exporters).save_all(_sample_groups(), out_dir)
+
+            self.assertEqual(len(result.saved), 2)  # sqlite и json сохранились
+            self.assertEqual(len(result.skipped), 1)
+            self.assertIn("тестовая зависимость не установлена", result.skipped[0])
+            suffixes = {p.suffix for p in result.saved}
+            self.assertEqual(suffixes, {".sqlite3", ".json"})
 
 
 if __name__ == "__main__":
