@@ -23,6 +23,13 @@ matching.py.
 
 Хеширование на стадиях 2 и 3 может выполняться параллельно (пул
 потоков, см. hash_computation.py).
+
+find() всегда возвращает группы, отсортированные по размеру файла
+по убыванию (внутри группы — по пути, для устойчивого порядка вне
+зависимости от того, в каком порядке завершились потоки хеширования).
+Это единственное место, где применяется сортировка — благодаря этому
+она автоматически действует и в отчётах (reporting.py), и при
+сохранении результатов (storage.py), без дублирования логики (DRY).
 """
 
 from pathlib import Path
@@ -99,8 +106,9 @@ class DuplicateFinder:
 
     def _group_by_key(self, records: List[FileRecord]) -> List[DuplicateGroup]:
         groups = group_by(records, key_fn=self._key_strategy.key)
-        return [
-            DuplicateGroup(key=key, records=recs)
+        duplicate_groups = [
+            DuplicateGroup(key=key, records=sorted(recs, key=lambda r: str(r.path)))
             for key, recs in groups.items()
             if len(recs) > 1
         ]
+        return sorted(duplicate_groups, key=lambda g: g.size_per_copy, reverse=True)

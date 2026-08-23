@@ -28,6 +28,12 @@ def _sample_groups():
     return [DuplicateGroup(key=("hash1",), records=[r1, r2])]
 
 
+def _make_group(size: int, file_hash: str) -> DuplicateGroup:
+    r1 = FileRecord(path=Path(f"{file_hash}_a"), name=f"{file_hash}_a", size=size, mtime=1.0, file_hash=file_hash)
+    r2 = FileRecord(path=Path(f"{file_hash}_b"), name=f"{file_hash}_b", size=size, mtime=2.0, file_hash=file_hash)
+    return DuplicateGroup(key=(file_hash,), records=[r1, r2])
+
+
 class MakeTimestampTests(unittest.TestCase):
     def test_format(self):
         self.assertRegex(make_timestamp(), TIMESTAMP_RE)
@@ -52,6 +58,20 @@ class SqliteResultExporterTests(unittest.TestCase):
             self.assertEqual(len(rows), 2)
             self.assertEqual(rows[0][1], "hash1")
             self.assertEqual(rows[0][5], 10)  # wasted_bytes = size * (count - 1)
+
+    def test_export_preserves_given_group_order(self):
+        """Экспортёр не переупорядочивает группы — porядок (по размеру,
+        по убыванию) обеспечивает DuplicateFinder (см. finder.py)."""
+        groups = [_make_group(1000, "big"), _make_group(100, "mid"), _make_group(10, "small")]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = SqliteResultExporter().export(groups, Path(tmp), "20260101_000000")
+            with sqlite3.connect(db_path) as conn:
+                rows = conn.execute(
+                    "SELECT DISTINCT group_id, size_bytes FROM duplicate_files ORDER BY group_id"
+                ).fetchall()
+
+            self.assertEqual(rows, [(1, 1000), (2, 100), (3, 10)])
 
 
 @unittest.skipUnless(HAS_PANDAS, "pandas не установлен")

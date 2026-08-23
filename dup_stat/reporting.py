@@ -3,6 +3,10 @@
 ReportFormatter — интерфейс (OCP): чтобы добавить новый формат вывода
 (например, CSV), достаточно реализовать новый класс, не трогая CLI
 или логику поиска.
+
+Порядок групп здесь не переопределяется: DuplicateFinder.find() уже
+возвращает их отсортированными по размеру файла по убыванию — форматтер
+просто выводит переданный порядок как есть (DRY, единая точка сортировки).
 """
 
 from abc import ABC, abstractmethod
@@ -26,11 +30,10 @@ class TextReportFormatter(ReportFormatter):
         if not groups:
             return "Дубликаты не найдены."
 
-        ordered = sorted(groups, key=lambda g: g.wasted_size, reverse=True)
         lines: List[str] = []
         total_wasted = 0
 
-        for index, group in enumerate(ordered, start=1):
+        for index, group in enumerate(groups, start=1):
             total_wasted += group.wasted_size
             sample = group.records[0]
             lines.append(

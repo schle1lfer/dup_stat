@@ -129,6 +129,36 @@ class DuplicateFinderTests(unittest.TestCase):
         par_paths = {r.path for r in parallel[0].records}
         self.assertEqual(seq_paths, par_paths)
 
+    def test_groups_are_sorted_by_size_descending(self):
+        # Группа маленьких дубликатов
+        (self.root / "small_a.txt").write_bytes(b"s" * 10)
+        (self.root / "small_b.txt").write_bytes(b"s" * 10)
+        # Группа крупных дубликатов
+        big = self.root / "big"
+        big.mkdir()
+        (self.root / "big_a.txt").write_bytes(b"b" * 1000)
+        (big / "big_b.txt").write_bytes(b"b" * 1000)
+        # Группа дубликатов среднего размера
+        (self.root / "mid_a.txt").write_bytes(b"m" * 100)
+        (self.root / "mid_b.txt").write_bytes(b"m" * 100)
+
+        groups = self._make_finder("hash").find(self.root)
+
+        sizes = [g.size_per_copy for g in groups]
+        self.assertEqual(sizes, sorted(sizes, reverse=True))
+        self.assertEqual(sizes, [1000, 100, 10])
+
+    def test_records_within_a_group_are_sorted_by_path(self):
+        sub = self.root / "sub"
+        sub.mkdir()
+        (self.root / "z.txt").write_bytes(b"same content")
+        (sub / "a.txt").write_bytes(b"same content")
+
+        groups = self._make_finder("hash").find(self.root)
+
+        paths = [str(r.path) for r in groups[0].records]
+        self.assertEqual(paths, sorted(paths))
+
 
 if __name__ == "__main__":
     unittest.main()
