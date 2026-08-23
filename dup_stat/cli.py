@@ -9,7 +9,8 @@ import argparse
 import sys
 from pathlib import Path
 
-from .finder import DuplicateFinder
+from .finder import DEFAULT_PARTIAL_HASH_BYTES, DuplicateFinder
+from .hash_computation import ThreadPoolHashComputation
 from .hashing import DEFAULT_CHUNK_SIZE, HashlibFileHasher
 from .matching import MATCH_PRESETS, create_strategy
 from .reporting import JsonReportFormatter, ReportFormatter, TextReportFormatter
@@ -65,6 +66,29 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Размер блока чтения файла при хешировании (в байтах).",
     )
     parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "Число потоков для параллельного хеширования файлов. "
+            "По умолчанию — автоматически (как в ThreadPoolExecutor). "
+            "Укажите 1, чтобы отключить параллелизм."
+        ),
+    )
+    parser.add_argument(
+        "--partial-hash-bytes",
+        type=int,
+        default=DEFAULT_PARTIAL_HASH_BYTES,
+        metavar="BYTES",
+        help=(
+            "Размер префикса файла для предварительного хеша — отсеивает "
+            "непохожие файлы без чтения их целиком (ускоряет работу на "
+            f"больших файлах). По умолчанию {DEFAULT_PARTIAL_HASH_BYTES} байт. "
+            "0 — отключить эту стадию."
+        ),
+    )
+    parser.add_argument(
         "--save-dir",
         type=Path,
         default=None,
@@ -97,12 +121,19 @@ def main(argv=None) -> int:
     try:
         hasher = HashlibFileHasher(algorithm=args.algorithm, chunk_size=args.chunk_size)
         strategy = create_strategy(args.match)
+        hash_computation = ThreadPoolHashComputation(max_workers=args.workers)
     except ValueError as exc:
         print(f"Ошибка: {exc}", file=sys.stderr)
         return 1
 
     scanner = RecursiveFileScanner(follow_symlinks=args.follow_symlinks, min_size=args.min_size)
-    finder = DuplicateFinder(scanner=scanner, hasher=hasher, key_strategy=strategy)
+    finder = DuplicateFinder(
+        scanner=scanner,
+        hasher=hasher,
+        key_strategy=strategy,
+        hash_computation=hash_computation,
+        partial_hash_bytes=args.partial_hash_bytes,
+    )
 
     try:
         groups = finder.find(args.directory)
