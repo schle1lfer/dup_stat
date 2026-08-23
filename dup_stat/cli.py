@@ -17,6 +17,7 @@ from .matching import MATCH_PRESETS, create_strategy
 from .models import sort_groups_by_size_desc
 from .progress import NullProgressReporter, ProgressReporter, SpinnerProgressReporter
 from .reporting import JsonReportFormatter, ReportFormatter, TextReportFormatter
+from .result_merge import load_previous_rows, merge_with_previous
 from .scanning import RecursiveFileScanner
 from .storage import (
     DataFrameResultExporter,
@@ -137,6 +138,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "(pandas/openpyxl), пропускаются без остановки остальных."
         ),
     )
+    parser.add_argument(
+        "--append-timestamp",
+        type=str,
+        default=None,
+        metavar="TIMESTAMP",
+        help=(
+            "Добавить результаты этого запуска к уже сохранённым — по "
+            "timestamp прежнего сохранения (например 20260823_071202, "
+            "как в имени файла 'dup_stat_results_20260823_071202.json'). "
+            "Прежние записи и новые объединяются, группы пересобираются "
+            "заново и сортируются вместе. Прежние файлы результата НЕ "
+            "изменяются — объединённый результат сохраняется под новым "
+            "timestamp. Требует --save-dir (там же должны лежать прежние "
+            "файлы результата, включая .json)."
+        ),
+    )
     return parser
 
 
@@ -206,6 +223,17 @@ def main(argv=None) -> int:
         # Убираем файловые группы, уже "объяснённые" найденной директорией-дубликатом.
         file_groups = filter_subsumed_file_groups(groups, directory_groups)
         groups = sort_groups_by_size_desc(file_groups + directory_groups)
+
+    if args.append_timestamp is not None:
+        if args.save_dir is None:
+            print("Ошибка: --append-timestamp требует --save-dir.", file=sys.stderr)
+            return 1
+        try:
+            previous_rows = load_previous_rows(args.save_dir, args.append_timestamp)
+        except FileNotFoundError as exc:
+            print(f"Ошибка: {exc}", file=sys.stderr)
+            return 1
+        groups = merge_with_previous(groups, previous_rows)
 
     formatter = _build_formatter(args.format)
     print(formatter.format(groups))

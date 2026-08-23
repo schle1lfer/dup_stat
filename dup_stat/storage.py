@@ -27,6 +27,7 @@ from typing import Dict, Iterator, List
 from .models import DuplicateGroup
 
 TIMESTAMP_FORMAT = "%Y%m%d_%H%M%S"
+DEFAULT_FILENAME_PREFIX = "dup_stat_results"  # общий префикс имени файла для всех форматов (DRY)
 
 
 def make_timestamp() -> str:
@@ -86,7 +87,7 @@ class SqliteResultExporter(ResultExporter):
     Зависимостей не требует — sqlite3 входит в стандартную библиотеку Python.
     """
 
-    def __init__(self, filename_prefix: str = "dup_stat_results"):
+    def __init__(self, filename_prefix: str = DEFAULT_FILENAME_PREFIX):
         self._filename_prefix = filename_prefix
 
     def export(self, groups: List[DuplicateGroup], output_dir: Path, timestamp: str) -> Path:
@@ -139,7 +140,7 @@ class JsonResultExporter(ResultExporter):
     не только на Python).
     """
 
-    def __init__(self, filename_prefix: str = "dup_stat_results"):
+    def __init__(self, filename_prefix: str = DEFAULT_FILENAME_PREFIX):
         self._filename_prefix = filename_prefix
 
     def export(self, groups: List[DuplicateGroup], output_dir: Path, timestamp: str) -> Path:
@@ -164,7 +165,7 @@ class DataFrameResultExporter(ResultExporter):
     одной командой `pandas.read_pickle(path)` без потери информации.
     """
 
-    def __init__(self, filename_prefix: str = "dup_stat_results"):
+    def __init__(self, filename_prefix: str = DEFAULT_FILENAME_PREFIX):
         self._filename_prefix = filename_prefix
 
     def export(self, groups: List[DuplicateGroup], output_dir: Path, timestamp: str) -> Path:
@@ -186,7 +187,7 @@ class ExcelResultExporter(ResultExporter):
     (умеет писать сам файл .xlsx) — pandas сам его не включает.
     """
 
-    def __init__(self, filename_prefix: str = "dup_stat_results"):
+    def __init__(self, filename_prefix: str = DEFAULT_FILENAME_PREFIX):
         self._filename_prefix = filename_prefix
 
     def export(self, groups: List[DuplicateGroup], output_dir: Path, timestamp: str) -> Path:
