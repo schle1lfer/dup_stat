@@ -33,6 +33,7 @@ python -m dup_stat /path/to/directory
 | `--follow-symlinks` | переходить по симлинкам | выключено |
 | `--format` | формат отчёта: `text` или `json` | `text` |
 | `--chunk-size` | размер блока чтения файла при хешировании | `1048576` |
+| `--save-dir` | дополнительно сохранить результаты локально в директорию (SQLite + pandas.DataFrame) | не сохранять |
 
 Примеры:
 
@@ -45,6 +46,9 @@ python -m dup_stat ~/Downloads --match hash+name
 
 # JSON-отчёт для дальнейшей обработки
 python -m dup_stat ~/Downloads --format json > report.json
+
+# Сохранить результаты локально: SQLite + pandas.DataFrame с одинаковым timestamp
+python -m dup_stat ~/Downloads --save-dir ./results
 ```
 
 Если пакет установлен (`pip install -e .`), доступна команда `dup-stat`
@@ -64,6 +68,49 @@ python -m dup_stat ~/Downloads --format json > report.json
 6. `ReportFormatter` (текстовый или JSON) выводит найденные группы и
    суммарный размер "лишних" копий (`wasted_size`) — то есть сколько
    места освободится, если в каждой группе оставить только один файл.
+7. Если указан `--save-dir`, `ResultPersistence` дополнительно сохраняет
+   результаты локально (см. раздел ниже).
+
+## Сохранение результатов локально (`--save-dir`)
+
+Флаг `--save-dir DIR` сохраняет результаты в двух локальных файлах —
+и в SQLite, и как `pandas.DataFrame`, с **одним и тем же timestamp** в
+имени, чтобы файлы одного запуска было легко сопоставить друг с
+другом:
+
+```
+DIR/dup_stat_results_20260823_052141.sqlite3
+DIR/dup_stat_results_20260823_052141.pkl
+```
+
+- **`.sqlite3`** — таблица `duplicate_files` (`group_id, file_hash, path,
+  name, size_bytes, mtime, wasted_bytes`); одна строка на файл. Открыть
+  можно любым SQLite-клиентом или `sqlite3` из stdlib:
+
+  ```python
+  import sqlite3
+  conn = sqlite3.connect("dup_stat_results_20260823_052141.sqlite3")
+  conn.execute("SELECT * FROM duplicate_files WHERE wasted_bytes > 1000").fetchall()
+  ```
+
+- **`.pkl`** — тот же набор строк, сохранённый как `pandas.DataFrame`
+  через `to_pickle` (сохраняет типы колонок в отличие от CSV).
+  Загружается одной командой:
+
+  ```python
+  import pandas as pd
+  df = pd.read_pickle("dup_stat_results_20260823_052141.pkl")
+  ```
+
+SQLite выбран как основной формат для локального хранения истории
+сканирований: не требует сервера, хранит всё в одном файле, позволяет
+делать SQL-запросы и легко читается тем же `pandas` (`pd.read_sql`).
+
+Реализация — в `dup_stat/storage.py`: `ResultExporter` — абстракция
+экспортёра (OCP: новый формат, например CSV или Parquet, добавляется
+новым классом), `SqliteResultExporter` и `DataFrameResultExporter` — её
+реализации, `ResultPersistence` — генерирует общий timestamp и
+прогоняет через него все переданные экспортёры.
 
 ## Архитектура и принципы SOLID / DRY
 
@@ -76,6 +123,7 @@ python -m dup_stat ~/Downloads --format json > report.json
 - `finder.py` — оркестрация поиска (`DuplicateFinder`), зависит только от абстракций выше (Dependency Inversion).
 - `reporting.py` — форматирование результата (`ReportFormatter` / `TextReportFormatter` / `JsonReportFormatter`).
 - `utils.py` — общие мелкие хелперы (например, `human_readable_size`), чтобы не дублировать форматирование размеров в нескольких местах (DRY).
+- `storage.py` — сохранение результатов в локальные файлы (`ResultExporter` / `SqliteResultExporter` / `DataFrameResultExporter` / `ResultPersistence`).
 - `cli.py` — точка сборки: разбор аргументов и связывание конкретных реализаций (единственное место, знающее обо всех классах сразу).
 
 Каждый интерфейс (`FileHasher`, `FileScanner`, `DuplicateKeyStrategy`,

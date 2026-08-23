@@ -14,6 +14,7 @@ from .hashing import DEFAULT_CHUNK_SIZE, HashlibFileHasher
 from .matching import MATCH_PRESETS, create_strategy
 from .reporting import JsonReportFormatter, ReportFormatter, TextReportFormatter
 from .scanning import RecursiveFileScanner
+from .storage import DataFrameResultExporter, ResultPersistence, SqliteResultExporter
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -63,6 +64,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
         metavar="BYTES",
         help="Размер блока чтения файла при хешировании (в байтах).",
     )
+    parser.add_argument(
+        "--save-dir",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help=(
+            "Дополнительно сохранить результаты локально в DIR: "
+            "файл SQLite ('dup_stat_results_<timestamp>.sqlite3') и "
+            "pandas.DataFrame ('dup_stat_results_<timestamp>.pkl'). "
+            "Оба файла одного запуска получают одинаковый timestamp."
+        ),
+    )
     return parser
 
 
@@ -99,6 +112,17 @@ def main(argv=None) -> int:
 
     formatter = _build_formatter(args.format)
     print(formatter.format(groups))
+
+    if args.save_dir is not None:
+        persistence = ResultPersistence([SqliteResultExporter(), DataFrameResultExporter()])
+        try:
+            saved_paths = persistence.save_all(groups, args.save_dir)
+        except ImportError as exc:
+            print(f"Ошибка: {exc}", file=sys.stderr)
+            return 1
+        for path in saved_paths:
+            print(f"Сохранено: {path}", file=sys.stderr)
+
     return 0
 
 
