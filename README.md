@@ -3,6 +3,20 @@
 Поиск файлов-дубликатов в директории по хешсумме содержимого и (опционально)
 дополнительным атрибутам файла — имени и размеру.
 
+## Установка (виртуальное окружение)
+
+Сам пакет не имеет внешних зависимостей (только стандартная библиотека,
+Python >= 3.8), но для интерактивной работы рекомендуется venv:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+
+pip install --upgrade pip
+pip install -e .                 # ставит сам dup_stat (даёт команду dup-stat)
+pip install -r requirements.txt  # jupyter/pandas/matplotlib для ноутбука
+```
+
 ## Использование
 
 ```bash
@@ -72,5 +86,20 @@ python -m dup_stat ~/Downloads --format json > report.json
 ## Тесты
 
 ```bash
+source .venv/bin/activate
 python -m unittest discover -s tests -v
+```
+
+## Jupyter-ноутбук
+
+`notebooks/dup_stat_demo.ipynb` — интерактивная демонстрация: создаёт
+временную директорию с дубликатами, запускает `DuplicateFinder`
+программно, показывает результат в виде таблицы `pandas.DataFrame`,
+строит график освобождаемого места по группам и сравнивает разные
+критерии совпадения (`hash`, `hash+name`, `hash+name+size`).
+
+```bash
+source .venv/bin/activate
+pip install -r requirements.txt   # если ещё не установлено
+jupyter notebook notebooks/dup_stat_demo.ipynb
 ```

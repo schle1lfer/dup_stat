@@ -1,0 +1,9 @@
+# dup_stat не имеет обязательных зависимостей — используется только
+# стандартная библиотека Python (>=3.8).
+#
+# Этот файл нужен только для запуска Jupyter-ноутбука в notebooks/.
+# Установка: pip install -r requirements.txt
+jupyter
+pandas
+matplotlib
+nbconvert

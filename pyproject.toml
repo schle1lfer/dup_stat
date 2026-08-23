@@ -12,5 +12,8 @@ readme = "README.md"
 [project.scripts]
 dup-stat = "dup_stat.cli:main"
 
+[project.optional-dependencies]
+notebook = ["jupyter", "pandas", "matplotlib", "nbconvert"]
+
 [tool.setuptools.packages.find]
 include = ["dup_stat*"]
