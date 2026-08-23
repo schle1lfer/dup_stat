@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dup_stat"
+version = "1.0.0"
+description = "Поиск файлов-дубликатов в директории по хешсумме и другим атрибутам"
+requires-python = ">=3.8"
+readme = "README.md"
+
+[project.scripts]
+dup-stat = "dup_stat.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["dup_stat*"]
