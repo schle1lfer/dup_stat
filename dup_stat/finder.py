@@ -109,7 +109,7 @@ class DuplicateFinder:
             return paths  # стадия отключена (partial_hash_bytes=0) или нечего проверять
 
         partial_hashes = self._hash_computation.compute_many(
-            paths, self._hasher, max_bytes=self._partial_hash_bytes
+            paths, self._hasher, max_bytes=self._partial_hash_bytes, label="предварительный хеш"
         )
         readable_paths = list(partial_hashes.keys())
         # Группируем по паре (размер, хеш первых байт) — совпадать должно и то, и другое.
@@ -121,7 +121,7 @@ class DuplicateFinder:
     def _build_records(self, paths: List[Path]) -> List[FileRecord]:
         """Считает полный хеш для оставшихся кандидатов и оборачивает
         каждый файл в FileRecord (со всеми его атрибутами)."""
-        hashes = self._hash_computation.compute_many(paths, self._hasher, max_bytes=None)
+        hashes = self._hash_computation.compute_many(paths, self._hasher, max_bytes=None, label="полный хеш")
         records: List[FileRecord] = []
         for path, file_hash in hashes.items():
             try:

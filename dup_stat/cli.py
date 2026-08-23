@@ -15,6 +15,7 @@ from .hash_computation import ThreadPoolHashComputation
 from .hashing import DEFAULT_CHUNK_SIZE, HashlibFileHasher
 from .matching import MATCH_PRESETS, create_strategy
 from .models import sort_groups_by_size_desc
+from .progress import NullProgressReporter, ProgressReporter, SpinnerProgressReporter
 from .reporting import JsonReportFormatter, ReportFormatter, TextReportFormatter
 from .scanning import RecursiveFileScanner
 from .storage import (
@@ -114,6 +115,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--no-progress",
+        action="store_true",
+        help=(
+            "Не показывать индикатор прогресса (крутящееся колёсико, проценты, "
+            "N из M файлов) во время хеширования. По умолчанию показывается, "
+            "если вывод идёт в терминал."
+        ),
+    )
+    parser.add_argument(
         "--save-dir",
         type=Path,
         default=None,
@@ -133,6 +143,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def _build_formatter(fmt: str) -> ReportFormatter:
     """По названию формата ('text'/'json') выбирает подходящий класс форматтера."""
     return JsonReportFormatter() if fmt == "json" else TextReportFormatter()
+
+
+def _build_progress_reporter(no_progress: bool) -> ProgressReporter:
+    """Индикатор прогресса показываем, только если явно не отключили
+    флагом и вывод действительно идёт в терминал (не перенаправлен в
+    файл/пайп) — иначе управляющие символы \\r засорили бы лог."""
+    if no_progress or not sys.stderr.isatty():
+        return NullProgressReporter()
+    return SpinnerProgressReporter()
 
 
 def main(argv=None) -> int:
@@ -158,7 +177,8 @@ def main(argv=None) -> int:
         # соединяется воедино.
         hasher = HashlibFileHasher(algorithm=args.algorithm, chunk_size=args.chunk_size)
         strategy = create_strategy(args.match)
-        hash_computation = ThreadPoolHashComputation(max_workers=args.workers)
+        progress = _build_progress_reporter(args.no_progress)
+        hash_computation = ThreadPoolHashComputation(max_workers=args.workers, progress=progress)
     except ValueError as exc:
         print(f"Ошибка: {exc}", file=sys.stderr)
         return 1
